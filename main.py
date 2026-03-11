@@ -1,129 +1,110 @@
 import os
 import re
-import time
 import logging
 import requests
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
-
-# ---------------- LOGGING ----------------
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------------- BOT TOKEN ----------------
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
+TERABOX_REGEX = r'https?://.*(terabox|1024terabox).*'
 
-# ---------------- SUPPORTED DOMAINS ----------------
+DOWNLOAD_FOLDER = "downloads"
 
-SUPPORTED_DOMAINS = [
-"terabox.com",
-"1024terabox.com",
-"teraboxapp.com",
-"teraboxlink.com",
-"terasharelink.com",
-"terafileshare.com",
-"www.1024tera.com",
-"1024tera.com",
-"1024tera.cn",
-"teraboxdrive.com",
-"dubox.com"
-]
-
-TERABOX_URL_REGEX = r'^https://(www\.)?(terabox\.com|1024terabox\.com|teraboxapp\.com|teraboxlink\.com|terasharelink\.com|terafileshare\.com|1024tera\.com|1024tera\.cn|teraboxdrive\.com|dubox\.com)/(s|sharing/link)/[A-Za-z0-9_-]+'
-
-# ---------------- HELPER ----------------
-
-def validate_terabox_url(url):
-    try:
-        return re.match(TERABOX_URL_REGEX, url) is not None
-    except:
-        return False
+os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
 
-# ---------------- SIMPLE TERABOX PARSER ----------------
+# --------- Direct Link Extractor (API) ---------
 
-def process_terabox_url(url):
-    
-    # Demo response (आप यहाँ अपना API लगा सकते हो)
-    
-    return [
-        {
-            "file_name": "Sample Video",
-            "size": "100 MB",
-            "direct_download_url": url
-        }
-    ]
+def get_direct_link(url):
+
+    api = f"https://terabox-dl-api.vercel.app/api?url={url}"
+
+    r = requests.get(api).json()
+
+    if "download_url" in r:
+        return r["download_url"]
+
+    raise Exception("Direct link not found")
 
 
-# ---------------- BOT COMMANDS ----------------
+# --------- Download Video ---------
+
+def download_video(url):
+
+    local_file = os.path.join(DOWNLOAD_FOLDER, "video.mp4")
+
+    with requests.get(url, stream=True) as r:
+
+        with open(local_file, "wb") as f:
+
+            for chunk in r.iter_content(chunk_size=1024*1024):
+                if chunk:
+                    f.write(chunk)
+
+    return local_file
+
+
+# --------- Commands ---------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
-        "👋 Welcome!\n\n"
-        "Send me a Terabox link.\n"
-        "Example:\n"
-        "https://terabox.com/s/xxxx"
+        "👋 Send Terabox link\nI will upload the video here."
     )
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     url = update.message.text.strip()
 
-    if not validate_terabox_url(url):
+    if not re.match(TERABOX_REGEX, url):
 
-        await update.message.reply_text(
-            "❌ Invalid Terabox URL.\n"
-            f"Supported domains:\n{', '.join(SUPPORTED_DOMAINS)}"
-        )
+        await update.message.reply_text("❌ Send valid Terabox link")
         return
 
-    msg = await update.message.reply_text(
-        "⏳ Processing your Terabox link..."
-    )
+    msg = await update.message.reply_text("⏳ Fetching video...")
 
     try:
 
-        files = process_terabox_url(url)
+        direct = get_direct_link(url)
 
-        if not files:
+        await msg.edit_text("⬇ Downloading video...")
 
-            await msg.edit_text("❌ No files found.")
-            return
+        file_path = download_video(direct)
 
-        for file in files:
+        await msg.edit_text("⬆ Uploading to Telegram...")
 
-            text = (
-                f"📄 Name : {file['file_name']}\n"
-                f"💾 Size : {file['size']}\n"
-                f"🔗 Download : {file['direct_download_url']}"
-            )
+        await update.message.reply_video(
+            video=open(file_path, "rb"),
+            caption="✅ Uploaded from Terabox"
+        )
 
-            await update.message.reply_text(text)
+        os.remove(file_path)
+
+        await msg.delete()
 
     except Exception as e:
 
         await update.message.reply_text(
-            f"❌ Error processing link:\n{str(e)}"
+            f"❌ Error : {str(e)}"
         )
 
 
-# ---------------- MAIN ----------------
+# --------- Main ---------
 
 async def main():
 
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
 
-    app.add_handler(
-        MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message)
-    )
+    app.add_handler(MessageHandler(filters.TEXT, handle_link))
 
-    logger.info("Bot Running...")
+    logger.info("Bot Running")
 
     await app.run_polling()
 
