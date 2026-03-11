@@ -1,7 +1,7 @@
 import os
 import re
-import logging
 import requests
+import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
@@ -10,50 +10,70 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-TERABOX_REGEX = r'https?://.*(terabox|1024terabox).*'
-
 DOWNLOAD_FOLDER = "downloads"
-
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
+COOKIES = {
+    "ndus": "Y-wWXKyteHuigAhC03Fr4bbee-QguZ4JC6UAdqap",
+    "lang": "en",
+    "PANWEB": "1"
+}
 
-# --------- Direct Link Extractor (API) ---------
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Referer": "https://www.terabox.com/"
+}
 
-def get_direct_link(url):
+# -------- Extract surl --------
 
-    api = f"https://terabox-dl-api.vercel.app/api?url={url}"
+def get_surl(url):
+    match = re.search(r'/s/([a-zA-Z0-9_-]+)', url)
+    if match:
+        return match.group(1)
 
-    r = requests.get(api).json()
+# -------- Get files --------
 
-    if "download_url" in r:
-        return r["download_url"]
+def get_files(url):
 
-    raise Exception("Direct link not found")
+    surl = get_surl(url)
 
+    api = "https://www.terabox.com/share/list"
 
-# --------- Download Video ---------
+    params = {
+        "app_id": "250528",
+        "shorturl": surl,
+        "root": "1"
+    }
 
-def download_video(url):
+    r = requests.get(api, params=params, cookies=COOKIES, headers=HEADERS, timeout=20)
 
-    local_file = os.path.join(DOWNLOAD_FOLDER, "video.mp4")
+    data = r.json()
 
-    with requests.get(url, stream=True) as r:
+    if "list" not in data:
+        raise Exception("❌ Invalid link or cookies expired")
 
-        with open(local_file, "wb") as f:
+    return data["list"]
 
+# -------- Download --------
+
+def download_file(link, filename):
+
+    path = os.path.join(DOWNLOAD_FOLDER, filename)
+
+    with requests.get(link, stream=True) as r:
+        with open(path, "wb") as f:
             for chunk in r.iter_content(chunk_size=1024*1024):
                 if chunk:
                     f.write(chunk)
 
-    return local_file
+    return path
 
-
-# --------- Commands ---------
+# -------- Telegram commands --------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
-        "👋 Send Terabox link\nI will upload the video here."
+        "👋 Send Terabox link\nBot will upload video here."
     )
 
 
@@ -61,50 +81,52 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     url = update.message.text.strip()
 
-    if not re.match(TERABOX_REGEX, url):
+    if "terabox" not in url:
 
         await update.message.reply_text("❌ Send valid Terabox link")
         return
 
-    msg = await update.message.reply_text("⏳ Fetching video...")
+    msg = await update.message.reply_text("🔍 Fetching file...")
 
     try:
 
-        direct = get_direct_link(url)
+        files = get_files(url)
 
-        await msg.edit_text("⬇ Downloading video...")
+        for f in files:
 
-        file_path = download_video(direct)
+            name = f["server_filename"]
+            link = f["dlink"]
 
-        await msg.edit_text("⬆ Uploading to Telegram...")
+            await msg.edit_text("⬇ Downloading...")
 
-        await update.message.reply_video(
-            video=open(file_path, "rb"),
-            caption="✅ Uploaded from Terabox"
-        )
+            file_path = download_file(link, name)
 
-        os.remove(file_path)
+            await msg.edit_text("⬆ Uploading...")
+
+            await update.message.reply_video(
+                video=open(file_path, "rb"),
+                caption=name
+            )
+
+            os.remove(file_path)
 
         await msg.delete()
 
     except Exception as e:
 
-        await update.message.reply_text(
-            f"❌ Error : {str(e)}"
-        )
+        await update.message.reply_text(str(e))
 
 
-# --------- Main ---------
+# -------- Main --------
 
 async def main():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-
     app.add_handler(MessageHandler(filters.TEXT, handle_link))
 
-    logger.info("Bot Running")
+    logger.info("Bot Running...")
 
     await app.run_polling()
 
@@ -112,5 +134,4 @@ async def main():
 if __name__ == "__main__":
 
     import asyncio
-
     asyncio.run(main())
