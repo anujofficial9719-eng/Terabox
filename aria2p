@@ -1,0 +1,25 @@
+import aria2p
+
+aria2 = aria2p.API(
+    aria2p.Client(
+        host="http://localhost",
+        port=6800,
+        secret=""
+    )
+)
+
+def fast_download(url):
+
+    options = {
+        "split": "16",
+        "max-connection-per-server": "16",
+        "min-split-size": "1M",
+        "dir": "downloads"
+    }
+
+    download = aria2.add_uris([url], options)
+
+    while not download.is_complete:
+        download.update()
+
+    return download.files[0].path
