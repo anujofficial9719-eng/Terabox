@@ -1,5 +1,3 @@
-Requirements.txt mein jo jo chahiye wo dedo
-
 import os
 import re
 import time
